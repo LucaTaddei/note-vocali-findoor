@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<title>Fine giornata Findoor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#c00000" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<style>
+  *{box-sizing:border-box}
+  body{font-family:Arial,sans-serif;margin:0;background:#f7f7f7;color:#222;min-height:100vh;display:flex;flex-direction:column}
+  header{background:#c00000;color:#fff;padding:14px 16px;font-weight:bold;font-size:18px;display:flex;justify-content:space-between}
+  #bar{height:5px;background:#e8b5b5}#bar i{display:block;height:100%;width:0;background:#fff;transition:width .2s}
+  main{flex:1;max-width:560px;width:100%;margin:0 auto;padding:20px 16px}
+  h2{margin:6px 0 16px}
+  input,select,textarea{width:100%;font-size:20px;padding:14px;border:1px solid #bbb;border-radius:10px;background:#fff;font-family:inherit}
+  textarea{min-height:170px}
+  .btn{display:block;width:100%;font-size:20px;padding:16px;border:0;border-radius:10px;background:#c00000;color:#fff;margin-top:14px}
+  .btn.g{background:#1a7f37}.btn.g.on{background:#c00000}.btn.s{background:#777}
+  .nav{display:flex;gap:10px}.nav .btn{margin-top:20px}
+  .sum{background:#fff;border-radius:10px;padding:14px;line-height:1.5;white-space:pre-wrap}
+  #msg{margin:14px 0;padding:12px;border-radius:10px;font-weight:bold;display:none}
+  #msg.ok{display:block;background:#dff5e3;color:#11602a}#msg.warn{display:block;background:#fff3cd;color:#6b5200}#msg.err{display:block;background:#fde2e2;color:#8a1111}
+</style>
+</head>
+<body>
+<header><span>Fine giornata</span><span id="step"></span></header>
+<div id="bar"><i></i></div>
+<main><div id="view"></div><div id="msg"></div></main>
+
+<script>
+/* ===== CONFIGURAZIONE: vedi README.md ===== */
+const CONFIG = {
+  FORM_ID: "",   // la parte lunga nell'URL del form: .../d/e/QUESTO/viewform
+  ENTRY: {       // numeri "entry.xxxx" dei campi del form
+    nome: "entry.0000000001", data: "entry.0000000002", cantiere: "entry.0000000003",
+    attivita: "entry.0000000004", problemi: "entry.0000000005", ore: "entry.0000000006"
+  },
+  COLLABORATORI: ["Nome Cognome 1", "Nome Cognome 2", "Nome Cognome 3"]
+};
+/* ========================================= */
+
+const $ = s => document.querySelector(s);
+const ls = { get:(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}}, set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}} };
+const pad = n => String(n).padStart(2,'0');
+const d0 = new Date();
+const D = { nome: ls.get('ff_nome',''), data: `${d0.getFullYear()}-${pad(d0.getMonth()+1)}-${pad(d0.getDate())}`, cantiere:'', attivita:'', problemi:'', ore:'' };
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, i = 0;
+
+const STEPS = [
+  { t:'Chi sei?', k:'nome', html:()=>`<select id="f">${['', ...CONFIG.COLLABORATORI].map(n=>`<option value="${n}">${n||'— scegli il tuo nome —'}</option>`).join('')}</select>`, req:true },
+  { t:'Dove hai lavorato oggi?', k:'cantiere', html:()=>`<input id="f" placeholder="Cantiere / cliente">`, req:true },
+  { t:'Cosa hai fatto?', k:'attivita', area:true, req:true },
+  { t:'Problemi o cose da sapere?', k:'problemi', area:true, sub:'Facoltativo: materiale mancante, imprevisti, da fare domani…' },
+  { t:'Quante ore hai lavorato?', k:'ore', html:()=>`<input id="f" type="number" inputmode="decimal" step="0.5" min="0" max="24" placeholder="es. 8">`, req:true },
+  { t:'Controlla e invia' }
+];
+
+function msg(t,c){const m=$('#msg');m.textContent=t||'';m.className=t?c:''}
+function stopRec(){ if(rec){rec.stop()} }
+
+function render(){
+  stopRec(); msg('');
+  const S = STEPS[i], last = i === STEPS.length-1;
+  $('#step').textContent = `${i+1}/${STEPS.length}`; $('#bar i').style.width = ((i+1)/STEPS.length*100)+'%';
+  let h = `<h2>${S.t}</h2>${S.sub?`<p>${S.sub}</p>`:''}`;
+  if(last){
+    h += `<div class="sum">👷 ${D.nome}\n📅 ${D.data}\n📍 ${D.cantiere}\n⏱ ${D.ore} ore\n\n🔨 ${D.attivita}${D.problemi?`\n\n⚠️ ${D.problemi}`:''}</div>
+          <div class="nav"><button class="btn s" id="bk">‹ Indietro</button><button class="btn" id="go">📨 Invia</button></div>`;
+  } else {
+    h += S.area ? `<textarea id="f" placeholder="Scrivi o detta…"></textarea>${SR?'<button class="btn g" id="mic">🎤 Detta a voce</button>':''}` : S.html();
+    h += `<div class="nav">${i?'<button class="btn s" id="bk">‹ Indietro</button>':''}<button class="btn" id="nx">Avanti ›</button></div>`;
+  }
+  $('#view').innerHTML = h;
+  const f = $('#f'); if(f){ f.value = D[S.k] || ''; }
+  $('#bk') && ($('#bk').onclick = ()=>{ save(); i--; render(); });
+  $('#nx') && ($('#nx').onclick = ()=>{ if(!save()) return; i++; render(); });
+  $('#go') && ($('#go').onclick = invia);
+  $('#mic') && ($('#mic').onclick = ()=>mic(f, $('#mic')));
+}
+
+function save(){
+  const S = STEPS[i], f = $('#f'); if(!f) return true;
+  D[S.k] = f.value.trim();
+  if(S.k==='nome') ls.set('ff_nome', D.nome);
+  if(S.req && !D[S.k]){ msg('Compila questo campo per continuare.','err'); return false; }
+  return true;
+}
+
+function mic(ta, btn){
+  if(rec){ rec.stop(); return; }
+  rec = new SR(); rec.lang='it-IT'; rec.continuous=true; rec.interimResults=false;
+  rec.onresult = e => { for(let j=e.resultIndex;j<e.results.length;j++) if(e.results[j].isFinal) ta.value=(ta.value?ta.value.trimEnd()+' ':'')+e.results[j][0].transcript.trim(); };
+  rec.onerror = e => msg('Errore microfono: '+e.error,'err');
+  rec.onend = () => { rec=null; btn.textContent='🎤 Detta a voce'; btn.classList.remove('on'); };
+  rec.start(); btn.textContent='⏹ Stop'; btn.classList.add('on');
+}
+
+/* Invio al Google Form + coda offline */
+async function manda(r){
+  if(!CONFIG.FORM_ID) throw new Error('FORM_ID mancante');
+  const p = new URLSearchParams();
+  for(const k in CONFIG.ENTRY) p.append(CONFIG.ENTRY[k], r[k] ?? '');
+  await fetch(`https://docs.google.com/forms/d/e/${CONFIG.FORM_ID}/formResponse`, { method:'POST', mode:'no-cors', body:p });
+}
+async function svuota(){
+  const q = ls.get('ff_coda',[]), rest=[];
+  for(const r of q){ try{ await manda(r) }catch(e){ rest.push(r) } }
+  ls.set('ff_coda', rest); return rest.length;
+}
+async function invia(){
+  $('#go').disabled = true;
+  const r = Object.assign({}, D);
+  try { await manda(r); fine('✅ Inviato. Grazie, buona serata!','ok'); }
+  catch(e){ const q=ls.get('ff_coda',[]); q.push(r); ls.set('ff_coda',q); fine('⚠️ Nessuna connessione: salvato sul telefono, parte da solo appena c\'è rete.','warn'); }
+}
+function fine(t,c){
+  Object.assign(D,{cantiere:'',attivita:'',problemi:'',ore:''}); i=0;
+  $('#view').innerHTML = '<button class="btn" id="again">Scrivi un altro rapportino</button>';
+  $('#again').onclick = render; $('#step').textContent=''; $('#bar i').style.width='100%'; msg(t,c);
+}
+window.addEventListener('online', svuota);
+render(); svuota().then(n=>{ if(n) msg(`⚠️ ${n} rapportino/i ancora da inviare.`,'warn') });
+</script>
+</body>
+</html>
