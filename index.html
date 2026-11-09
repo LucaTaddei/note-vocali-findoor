@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Rapportino Findoor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#c00000" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 16px; background: #f7f7f7; color: #222; }
+    main { max-width: 560px; margin: 0 auto; }
+    h1 { color: #c00000; text-align: center; margin: 8px 0 4px; }
+    .sub { text-align: center; color: #666; margin: 0 0 18px; }
+    label { display: block; font-weight: bold; margin: 14px 0 6px; }
+    input, select, textarea { width: 100%; font-size: 17px; padding: 12px; border: 1px solid #bbb; border-radius: 8px; background: #fff; font-family: inherit; }
+    textarea { min-height: 130px; resize: vertical; }
+    .row { display: flex; gap: 10px; }
+    .row > div { flex: 1; }
+    button { font-size: 18px; padding: 14px 20px; border: none; border-radius: 8px; background: #c00000; color: #fff; cursor: pointer; }
+    button.sec { background: #555; font-size: 15px; padding: 8px 12px; margin-top: 6px; }
+    button.rec { background: #1a7f37; }
+    button.rec.on { background: #c00000; }
+    button.big { width: 100%; margin-top: 22px; }
+    button:disabled { opacity: .5; }
+    #msg { margin-top: 16px; padding: 12px; border-radius: 8px; display: none; text-align: center; font-weight: bold; }
+    #msg.ok { display: block; background: #dff5e3; color: #11602a; }
+    #msg.err { display: block; background: #fde2e2; color: #8a1111; }
+    #msg.warn { display: block; background: #fff3cd; color: #6b5200; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Rapportino Findoor</h1>
+  <p class="sub">Cosa hai fatto oggi? Due minuti e hai finito.</p>
+
+  <form id="f" autocomplete="off">
+    <label for="nome">Chi sei</label>
+    <select id="nome" required></select>
+
+    <div class="row">
+      <div><label for="data">Data</label><input type="date" id="data" required /></div>
+      <div><label for="ore">Ore lavorate</label><input type="number" id="ore" inputmode="decimal" step="0.5" min="0" max="24" placeholder="es. 8" /></div>
+    </div>
+
+    <label for="cantiere">Cantiere / cliente</label>
+    <input type="text" id="cantiere" placeholder="es. Rossi – Via Roma 12" required />
+
+    <label for="attivita">Cosa hai fatto</label>
+    <textarea id="attivita" placeholder="Scrivi o detta…" required></textarea>
+    <button type="button" class="sec rec" id="mic1" data-target="attivita">🎤 Detta</button>
+
+    <label for="problemi">Problemi / cose da sapere (facoltativo)</label>
+    <textarea id="problemi" placeholder="Materiale mancante, imprevisti, da fare domani…"></textarea>
+    <button type="button" class="sec rec" id="mic2" data-target="problemi">🎤 Detta</button>
+
+    <button type="submit" class="big" id="invia">📨 Invia rapportino</button>
+  </form>
+  <div id="msg"></div>
+</main>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  const C = window.CONFIG || {};
+  const $ = id => document.getElementById(id);
+  const QKEY = 'findoor_coda', NKEY = 'findoor_nome';
+  const store = {
+    get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+
+  // Menu collaboratori
+  const sel = $('nome');
+  sel.innerHTML = '<option value="">— scegli il tuo nome —</option>' +
+    (C.COLLABORATORI || []).map(n => `<option>${n}</option>`).join('');
+  sel.value = store.get(NKEY, '');
+  sel.onchange = () => store.set(NKEY, sel.value);
+
+  function oggi() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  $('data').value = oggi();
+
+  function msg(txt, cls) { const m = $('msg'); m.textContent = txt; m.className = cls; }
+
+  // Dettatura (aggiunge al testo già scritto)
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  document.querySelectorAll('button.rec').forEach(btn => {
+    if (!SR) { btn.style.display = 'none'; return; }
+    btn.onclick = () => {
+      if (rec) { rec.stop(); return; }
+      const ta = $(btn.dataset.target);
+      rec = new SR(); rec.lang = 'it-IT'; rec.continuous = true; rec.interimResults = false;
+      rec.onresult = e => {
+        for (let i = e.resultIndex; i < e.results.length; i++)
+          if (e.results[i].isFinal) ta.value = (ta.value ? ta.value.trimEnd() + ' ' : '') + e.results[i][0].transcript.trim();
+      };
+      rec.onerror = e => msg('Errore microfono: ' + e.error, 'err');
+      rec.onend = () => { rec = null; btn.textContent = '🎤 Detta'; btn.classList.remove('on'); };
+      rec.start(); btn.textContent = '⏹ Stop'; btn.classList.add('on');
+    };
+  });
+
+  // Invio con coda offline
+  async function manda(r) {
+    if (!C.SCRIPT_URL) throw new Error('SCRIPT_URL non configurato');
+    // text/plain evita la richiesta preflight CORS verso Apps Script
+    await fetch(C.SCRIPT_URL, {
+      method: 'POST', mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(Object.assign({ token: C.TOKEN }, r))
+    });
+  }
+
+  async function svuotaCoda() {
+    let coda = store.get(QKEY, []), restanti = [];
+    for (const r of coda) { try { await manda(r); } catch (e) { restanti.push(r); } }
+    store.set(QKEY, restanti);
+    return restanti.length;
+  }
+
+  $('f').onsubmit = async ev => {
+    ev.preventDefault();
+    const r = {
+      id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      nome: $('nome').value, data: $('data').value, ore: $('ore').value,
+      cantiere: $('cantiere').value.trim(), attivita: $('attivita').value.trim(),
+      problemi: $('problemi').value.trim()
+    };
+    if (!r.nome) return msg('Scegli il tuo nome.', 'err');
+    $('invia').disabled = true;
+    try {
+      await manda(r);
+      msg('✅ Rapportino inviato. Grazie, buona serata!', 'ok');
+    } catch (e) {
+      const coda = store.get(QKEY, []); coda.push(r); store.set(QKEY, coda);
+      msg('⚠️ Non sono riuscito a inviare (' + e.message + '). L\'ho salvato sul telefono e riprovo da solo.', 'warn');
+    }
+    $('cantiere').value = $('attivita').value = $('problemi').value = $('ore').value = '';
+    $('invia').disabled = false;
+  };
+
+  window.addEventListener('online', svuotaCoda);
+  svuotaCoda().then(n => { if (n) msg('⚠️ Hai ' + n + ' rapportino/i non ancora inviato/i.', 'warn'); });
+})();
+</script>
+</body>
+</html>
